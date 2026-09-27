@@ -1,5 +1,5 @@
 import { describe, expect, mock, test, tier } from 'claude-code/testing'
-import type { On, PromptOrigin, PromptSubmitInput } from 'claude-code'
+import type { On, PromptOrigin, PromptSubmitInput, RenderInput } from 'claude-code'
 
 tier('user')
 
@@ -51,6 +51,7 @@ function worldOf(on: On, { tokens = 100_000, language = 'English', answer }: Set
     return {}
   })
   on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', children: [] }))
   return world
 }
 
@@ -59,6 +60,21 @@ const typed = (text: string, origin: PromptOrigin = { kind: 'composer' }): Promp
   wait: false,
   origin,
 })
+
+const PROMPT_BOX: RenderInput<'AbovePrompt'> = {
+  component: 'AbovePrompt',
+  surface: 'terminal',
+  requestId: 'above-prompt',
+  viewport: { columns: 160, rows: 40, isFullscreen: true },
+  props: {
+    hasSurvey: false,
+    isWorking: false,
+    maxRows: 10,
+    bodyColumns: 160,
+    scroll: { offset: 0, bodyRows: 30 },
+    view: {},
+  },
+}
 
 const ANSWER = {
   answer: 'ok',
@@ -183,6 +199,10 @@ describe('register', () => {
       estimated_cache_write_usd: 2.63,
     })
     await clock.settle()
+    expect(world.asked, 'nothing before the prompt box is drawn').toEqual([])
+
+    await $.ui.render(PROMPT_BOX)
+    await clock.advance(0)
 
     expect(world.asked).toHaveLength(1)
     expect(world.asked[0]).toContain('2h00')
@@ -205,7 +225,8 @@ describe('register', () => {
       prompt_cache_likely_expired: false,
       estimated_cache_write_usd: 2.63,
     })
-    await clock.settle()
+    await $.ui.render(PROMPT_BOX)
+    await clock.advance(0)
 
     expect(world.asked).toEqual([])
   })
