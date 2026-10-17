@@ -102,6 +102,7 @@ async function clearThenRefill($: EngineInterface, text: string): Promise<void> 
 export const register: Register = (on, options) => {
   const ttlMs = Number(options.ttlMinutes ?? 60) * 60_000
   const minTokens = Number(options.minTokens ?? 30_000)
+  let pendingResume: Cold | undefined
 
   // Claude Code measures a resumed transcript itself, with the session's real
   // cache lifetime; that estimate beats the configured one.
@@ -117,14 +118,24 @@ export const register: Register = (on, options) => {
     await update($, isSettled, () => false)
     const tokens = e.context_tokens ?? 0
     if (e.prompt_cache_likely_expired && tokens >= minTokens) {
-      // Not awaited: the session goes on loading while the dialog waits.
-      void askAtResume($, {
-        idleMs: seconds * 1000,
-        tokens,
-        usd: e.estimated_cache_write_usd,
-      }).catch(error => $.ui.log(`resume question failed: ${error}`, { to: 'debug' }))
+      pendingResume = { idleMs: seconds * 1000, tokens, usd: e.estimated_cache_write_usd }
     }
     return result
+  })
+
+  // A question raised while the session is still starting can hang unseen, so
+  // the resume question waits for the prompt box to be drawn.
+  on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
+    const cold = pendingResume
+    if (cold !== undefined) {
+      pendingResume = undefined
+      $.clock.after(0, () =>
+        void askAtResume($, cold).catch(error =>
+          $.ui.log(`resume question failed: ${error}`, { to: 'debug' }),
+        ),
+      )
+    }
+    return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {

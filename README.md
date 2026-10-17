@@ -54,7 +54,7 @@ Sessions started before that change do not load it.
 
 ## How it works
 
-- A `classic.SessionStart` hook reads what Claude Code reports on a resume (`seconds_since_last_response`, `context_tokens`, `prompt_cache_likely_expired`, `estimated_cache_write_usd`) and asks while the session loads.
+- A `classic.SessionStart` hook reads what Claude Code reports on a resume (`seconds_since_last_response`, `context_tokens`, `prompt_cache_likely_expired`, `estimated_cache_write_usd`). The question waits for the first `AbovePrompt` render: raised earlier in startup, it can hang without ever showing.
 - A `turn.complete` hook records when the last answer arrived, in the session's `$.state`, so a reload of the mod keeps it.
 - A `prompt.submit` hook compares that time with `ttlMinutes` and the live context size with `minTokens`, then asks through `$.ui.ask`. A prompt hook cannot compact or run `/clear` while it holds the prompt, so those run right after the prompt is dropped, and the prompt comes back to the box rather than being resubmitted.
 - A choice holds until the next answer, so a cancelled prompt asks again and an accepted one does not.
