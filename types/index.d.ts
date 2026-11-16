@@ -1,7 +1,7 @@
 declare module 'claude-code' {
   interface PluginState {
     'cold-cache-guard': {
-      /** Epoch ms of the session's last main-thread answer; null before the first one. */
+      /** Epoch ms when the last main-thread request started; null before the first answer. */
       lastAnswerAtMs: number | null
       /** Tokens a resumed transcript's next request re-sends, until a live figure exists. */
       resumedTokens: number | null

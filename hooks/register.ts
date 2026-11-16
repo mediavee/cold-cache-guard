@@ -87,15 +87,32 @@ async function askAtResume($: EngineInterface, cold: Cold): Promise<void> {
 // A prompt.submit hook cannot compact or run a command itself: both would wait
 // on the turn it holds. These run once its dispatch has ended.
 
+async function restorePrompt($: EngineInterface, text: string, error: unknown): Promise<void> {
+  await $.prompt.fill({ text })
+  $.ui.log(`cold-cache action failed: ${String(error)}`, { to: 'debug' })
+}
+
 async function compactThenRefill($: EngineInterface, text: string): Promise<void> {
-  await $.session.compact()
+  try {
+    await $.session.compact()
+  } catch (error) {
+    await restorePrompt($, text, error)
+    return
+  }
   // Refilled rather than resubmitted: the model would read a plugin's prompt
   // as the plugin's message, not the person's.
   await $.prompt.fill({ text })
+  // A failed compact must ask again, so the choice is settled only after this one works.
+  await update($, isSettled, () => true)
 }
 
 async function clearThenRefill($: EngineInterface, text: string): Promise<void> {
-  await $.command.run({ command: 'clear' })
+  try {
+    await $.command.run({ command: 'clear' })
+  } catch (error) {
+    await restorePrompt($, text, error)
+    return
+  }
   await $.prompt.fill({ text })
 }
 
@@ -141,7 +158,9 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     const now = await $.clock.now()
-    await update($, lastAnswerAtMs, () => now)
+    // The cache TTL starts when the request starts, and generation counts.
+    // https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+    await update($, lastAnswerAtMs, () => now - e.durationMs)
     await update($, resumedTokens, () => null)
     await update($, isSettled, () => false)
     return result
@@ -175,12 +194,19 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     if (choice === texts.compactFirst) {
-      await update($, isSettled, () => true)
-      $.clock.after(0, () => void compactThenRefill($, e.text).catch(() => {}))
+      $.clock.after(0, () => {
+        void compactThenRefill($, e.text).catch(error => {
+          $.ui.log(`cold-cache action failed: ${String(error)}`, { to: 'debug' })
+        })
+      })
       return { drop: texts.compacting }
     }
     if (choice === texts.clear) {
-      $.clock.after(0, () => void clearThenRefill($, e.text).catch(() => {}))
+      $.clock.after(0, () => {
+        void clearThenRefill($, e.text).catch(error => {
+          $.ui.log(`cold-cache action failed: ${String(error)}`, { to: 'debug' })
+        })
+      })
       return { drop: texts.cleared }
     }
     await $.prompt.fill({ text: e.text })
