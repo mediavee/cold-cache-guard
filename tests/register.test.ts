@@ -13,13 +13,22 @@ type World = {
   clears: number
 }
 
-type Setup = { tokens?: number; language?: string; answer?: string }
+type Setup = {
+  tokens?: number
+  language?: string
+  answer?: string
+  compactError?: Error
+  clearError?: Error
+}
 
 /**
  * Answers every call the mod makes beneath it, as the engine would, and
  * records what reached the engine.
  */
-function worldOf(on: On, { tokens = 100_000, language = 'English', answer }: Setup) {
+function worldOf(
+  on: On,
+  { tokens = 100_000, language = 'English', answer, compactError, clearError }: Setup,
+) {
   const world: World = { asked: [], submitted: [], filled: [], compactions: 0, clears: 0 }
   on('settings.read', () => ({ value: { language } }))
   on('session.usage', () => ({
@@ -44,10 +53,16 @@ function worldOf(on: On, { tokens = 100_000, language = 'English', answer }: Set
   })
   on('session.compact', () => {
     world.compactions += 1
+    if (compactError) {
+      throw compactError
+    }
     return { messages: [{ role: 'user' as const, text: 'summary', toolUses: [] }] }
   })
   on('command.run', { command: 'clear' }, () => {
     world.clears += 1
+    if (clearError) {
+      throw clearError
+    }
     return {}
   })
   on('turn.complete', ($, e) => ({ text: e.answer }))
@@ -147,6 +162,10 @@ describe('register', () => {
     expect(world.submitted).toEqual([])
     expect(world.compactions).toBe(1)
     expect(world.filled).toEqual(['hello'])
+
+    await $.prompt.submit(typed('after'))
+    expect(world.asked).toHaveLength(1)
+    expect(world.submitted).toEqual(['after'])
   })
 
   test('Start over clears once the prompt is dropped, then refills it', async ($, on) => {
@@ -229,6 +248,64 @@ describe('register', () => {
     await clock.advance(0)
 
     expect(world.asked).toEqual([])
+  })
+
+  test('generation time counts against the cache lifetime', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, { answer: 'Cancel' })
+    await $.turn.complete({ ...ANSWER, durationMs: 10 * 60_000 })
+    // 55 minutes after the answer finished is 65 minutes after the request started.
+    await clock.advance(55 * 60_000)
+
+    await $.prompt.submit(typed('later'))
+
+    expect(world.asked).toHaveLength(1)
+    expect(world.submitted).toEqual([])
+  })
+
+  test('a failed compact restores the prompt and asks again', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, {
+      answer: 'Compact first',
+      compactError: new Error('not compactable'),
+    })
+    await $.turn.complete(ANSWER)
+    await clock.advance(2 * HOUR)
+
+    await $.prompt.submit(typed('hello'))
+    await clock.advance(0)
+
+    expect(world.submitted).toEqual([])
+    expect(world.filled).toEqual(['hello'])
+
+    await $.prompt.submit(typed('hello'))
+    await clock.advance(0)
+
+    expect(world.asked).toHaveLength(2)
+    expect(world.submitted).toEqual([])
+  })
+
+  test('a failed clear restores the prompt and asks again', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, {
+      answer: 'Start over (/clear)',
+      clearError: new Error('clear rejected'),
+    })
+    await $.turn.complete(ANSWER)
+    await clock.advance(2 * HOUR)
+
+    await $.prompt.submit(typed('hello'))
+    await clock.advance(0)
+
+    expect(world.submitted).toEqual([])
+    expect(world.filled).toEqual(['hello'])
+    expect(world.clears).toBe(1)
+
+    await $.prompt.submit(typed('hello'))
+    await clock.advance(0)
+
+    expect(world.asked).toHaveLength(2)
+    expect(world.submitted).toEqual([])
   })
 
   test('the question follows the language setting', async ($, on) => {
